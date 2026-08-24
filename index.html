@@ -178,24 +178,32 @@ const LEVEL_COLORS = {
   '5': { bg: '#FCE4EC', border: '#AD1457', chart: '#E91E8C' },
   '6': { bg: '#EDE7F6', border: '#4527A0', chart: '#7B1FA2' },
 };
-const EXTRA_COLOR = { bg: '#F0F0EE', border: '#AAAAAA', chart: '#AAAAAA' };
+const EXTRA_COLOR  = { bg: '#F0F0EE', border: '#AAAAAA', chart: '#AAAAAA' };
+const PROPER_COLOR = { bg: '#E3F2FD', border: '#1976D2', chart: '#42A5F5' };
 
 function getLevelKey(lvl) { return lvl.replace(/\D/g, '') || lvl; }
 function getColor(lvl) {
-  if (lvl === '__extra__') return EXTRA_COLOR;
+  if (lvl === '__extra__')  return EXTRA_COLOR;
+  if (lvl === '__proper__') return PROPER_COLOR;
   return LEVEL_COLORS[getLevelKey(lvl)] || { bg: '#E8E8E8', border: '#999', chart: '#999' };
 }
 
-// ── WLB weights ──────────────────────────────────────────────────
+// ── WLB weights (aligned with Nation's Lexical Frequency Profile) ─
+// L1-L2 ≈ K1-K2 (most frequent 2,000 word families) → weight 0
+// L3-L4 ≈ K3-K6 (3,000–6,000 word families)         → weight 2 / 5
+// L5-L6 ≈ AWL / K7+ (academic & specialist vocab)   → weight 10 / 16
+// Extra = off-list unknown words                     → weight 22
 function getLevelNum(lvl) {
-  if (lvl === '__extra__') return 0;
+  if (lvl === '__extra__' || lvl === '__proper__') return 0;
   return parseInt(getLevelKey(lvl)) || 0;
 }
 function baseWeight(lvlNum) {
-  if (lvlNum <= 0) return 5;
-  if (lvlNum <= 2) return 0;
-  if (lvlNum <= 4) return 3;
-  return 8;
+  if (lvlNum <= 0) return 22;   // Extracurricular (off-list)
+  if (lvlNum <= 2) return 0;    // L1-L2: foundational / K1-K2
+  if (lvlNum === 3) return 2;   // L3: lower-intermediate
+  if (lvlNum === 4) return 5;   // L4: upper-intermediate
+  if (lvlNum === 5) return 10;  // L5: advanced / AWL
+  return 16;                    // L6: specialized
 }
 
 // ── State ─────────────────────────────────────────────────────────
@@ -279,12 +287,37 @@ const IRREGULAR = {
   'mice':'mouse','geese':'goose','lives':'life','wives':'wife',
   'knives':'knife','leaves':'leaf','halves':'half','wolves':'wolf',
   'better':'good','best':'good','worse':'bad','worst':'bad',
+  // ── Negative contractions ─────────────────────────────────────
+  "can't":'can', 'cannot':'can',
+  "won't":'will', "wouldn't":'would',
+  "don't":'do', "doesn't":'do', "didn't":'do',
+  "isn't":'be', "aren't":'be', "wasn't":'be', "weren't":'be',
+  "haven't":'have', "hasn't":'have', "hadn't":'have',
+  "couldn't":'could', "shouldn't":'should', "mustn't":'must',
+  "mightn't":'might', "shan't":'shall', "needn't":'need', "daren't":'dare',
+  // ── Pronoun + 're / 've / 'll / 'd / 'm contractions ─────────
+  "i'm":'be',
+  "you're":'be', "we're":'be', "they're":'be',
+  "i've":'have', "you've":'have', "we've":'have', "they've":'have',
+  "i'll":'will', "you'll":'will', "he'll":'will', "she'll":'will',
+  "we'll":'will', "they'll":'will',
+  "i'd":'would', "you'd":'would', "he'd":'would', "she'd":'would',
+  "we'd":'would', "they'd":'would',
+  // ── Misc common contractions ──────────────────────────────────
+  "let's":'let',
+  "that'll":'will', "that'd":'would',
+  "who'll":'will', "who'd":'would', "who've":'have',
+  "what've":'have', "what'll":'will', "what'd":'do',
+  "there've":'have', "there'll":'will', "there'd":'be',
+  "how'd":'do', "how'll":'will',
 };
 
 function lemmatize(word) {
   const w = word.toLowerCase();
   if (wordMap[w]) return w;
   if (IRREGULAR[w]) return IRREGULAR[w];
+  // Handle possessive 's and "is/has" contractions ending in 's (he's → he, John's → john)
+  if (w.endsWith("'s")) { const base = w.slice(0, -2); if (wordMap[base]) return base; if (base) return base; }
   if (w.endsWith('ing')) { const s = w.slice(0,-3); if (wordMap[s]) return s; if (wordMap[s+'e']) return s+'e'; if (s.length>2 && s[s.length-1]===s[s.length-2] && wordMap[s.slice(0,-1)]) return s.slice(0,-1); }
   if (w.endsWith('ed'))  { const s = w.slice(0,-2); if (wordMap[s]) return s; if (wordMap[s+'e']) return s+'e'; if (s.length>2 && s[s.length-1]===s[s.length-2] && wordMap[s.slice(0,-1)]) return s.slice(0,-1); if (wordMap[w.slice(0,-1)]) return w.slice(0,-1); }
   if (w.endsWith('ies') && wordMap[w.slice(0,-3)+'y']) return w.slice(0,-3)+'y';
@@ -295,6 +328,151 @@ function lemmatize(word) {
   if (w.endsWith('ly') && wordMap[w.slice(0,-2)]) return w.slice(0,-2);
   return null;
 }
+
+// ── Proper noun dictionary (zero difficulty weight) ───────────────
+// Words here are recognized and displayed but do NOT raise the WLB score.
+// Includes: top-20 countries + nationality forms, common first names,
+// famous rivers/islands, and continent adjectives.
+const PROPER_NOUNS = new Set([
+  // ── Top 20 countries + derivations ───────────────────────────
+  // 1. USA / United States
+  'america','american','americans',
+  // 2. UK / Britain
+  'britain','british','britisher','briton','britons','scot','scots','scottish','welsh','irishman','irishmen',
+  // 3. China
+  'china','chinese',
+  // 4. Japan
+  'japan','japanese',
+  // 5. France
+  'france','french','frenchman','frenchmen','frenchwoman','frenchwomen',
+  // 6. Germany
+  'germany','german','germans',
+  // 7. Australia
+  'australia','australian','australians','aussie','aussies',
+  // 8. Canada
+  'canada','canadian','canadians',
+  // 9. India
+  'india','indian','indians',
+  // 10. Brazil
+  'brazil','brazilian','brazilians',
+  // 11. Mexico
+  'mexico','mexican','mexicans',
+  // 12. Russia
+  'russia','russian','russians',
+  // 13. South Korea / Korea
+  'korea','korean','koreans',
+  // 14. Italy
+  'italy','italian','italians',
+  // 15. Spain
+  'spain','spanish','spaniard','spaniards',
+  // 16. Taiwan
+  'taiwan','taiwanese',
+  // 17. Thailand
+  'thailand','thai','thais',
+  // 18. Vietnam
+  'vietnam','vietnamese',
+  // 19. Singapore
+  'singapore','singaporean','singaporeans',
+  // 20. Philippines
+  'philippines','philippine','filipino','filipinos','filipina','filipinas',
+  // ── Additional common countries ───────────────────────────────
+  'indonesia','indonesian','indonesians',
+  'malaysia','malaysian','malaysians',
+  'turkey','turkish','turk','turks',
+  'egypt','egyptian','egyptians',
+  'argentina','argentinian','argentinians','argentine',
+  'netherlands','dutch','hollander','hollanders',
+  'sweden','swedish','swede','swedes',
+  'norway','norwegian','norwegians',
+  'denmark','danish','dane','danes',
+  'finland','finnish','finn','finns',
+  'switzerland','swiss',
+  'austria','austrian','austrians',
+  'portugal','portuguese',
+  'greece','greek','greeks',
+  'poland','polish','pole','poles',
+  'ukraine','ukrainian','ukrainians',
+  'israel','israeli','israelis',
+  'iran','iranian','iranians','persian','persians',
+  'iraq','iraqi','iraqis',
+  'saudi','saudis',
+  'pakistan','pakistani','pakistanis',
+  'bangladesh','bangladeshi','bangladeshis',
+  'myanmar','burmese',
+  'cambodia','cambodian','cambodians','khmer',
+  'laos','laotian','laotians','lao',
+  'nepal','nepalese','nepali','nepalis',
+  'srilanka','srilankan','srilankan',
+  'newzealand','zealand',
+  'colombia','colombian','colombians',
+  'peru','peruvian','peruvians',
+  'chile','chilean','chileans',
+  'venezuela','venezuelan','venezuelans',
+  'kenya','kenyan','kenyans',
+  'nigeria','nigerian','nigerians',
+  'ethiopia','ethiopian','ethiopians',
+  'ghana','ghanaian','ghanaians',
+  // ── Continent / region adjectives ─────────────────────────────
+  'africa','african','africans',
+  'asia','asian','asians',
+  'europe','european','europeans',
+  'antarctica','antarctic',
+  'oceania',
+  'mideast','arab','arabs','arabic',
+  // ── Famous rivers ─────────────────────────────────────────────
+  'amazon','nile','mississippi','thames','yangtze','rhine','ganges','mekong',
+  'danube','seine','volga','congo','niger','euphrates','tigris','hudson',
+  'colorado','columbia','jordan','tiber','indus','brahmaputra','irrawaddy',
+  // ── Famous islands / regions ──────────────────────────────────
+  'hawaii','hawaiian','bali','okinawa','hokkaido','honshu',
+  'sicily','sicilian','sardinia','corsica','malta','maltese',
+  'crete','cyprus','cypriot','iceland','icelandic','icelander',
+  'borneo','sumatra','java','javanese','lombok','timor',
+  'macau','macao','taiwan',   // taiwan already above but harmless
+  'guam','samoa','fiji','fijian','tonga','tongan','tahiti','tahitian',
+  'madagascar','mauritius','maldives',
+  'cuba','cuban','cubans','bahamas','bahamian','jamaica','jamaican','jamaicans',
+  'haiti','haitian','haitians','dominican','barbados','barbadian',
+  // ── Common English first names (female) ───────────────────────
+  'emma','olivia','ava','isabella','sophia','mia','charlotte','amelia',
+  'harper','evelyn','abigail','emily','elizabeth','sofia','ella','madison',
+  'scarlett','victoria','aria','chloe','camila','penelope','riley','zoey',
+  'nora','eleanor','hannah','lillian','addison','aubrey','ellie','stella',
+  'natalie','zoe','leah','hazel','aurora','savannah','audrey','brooklyn',
+  'bella','claire','skylar','lucy','paisley','anna','caroline','nova',
+  'emilia','kennedy','samantha','avery','naomi','alice','sandra','nicole',
+  'brianna','ariana','kate','sarah','julia','rachel','rebecca','ashley',
+  'jennifer','jessica','amanda','melissa','stephanie','michelle','angela',
+  'heather','patricia','linda','susan','nancy','karen','betty','dorothy',
+  'lisa','margaret','helen','gloria','brenda','wendy','tammy','theresa',
+  'deborah','alexis','monica','diana','tiffany','amber','crystal','brittany',
+  'vanessa','natasha','veronica','katelyn','kayla','paige','shelby',
+  'sierra','taylor','cassandra','miranda','cassie','alicia','kaitlyn',
+  'courtney','bianca','miranda','leila','aisha','fatima','layla','yasmin',
+  'mei','sakura','yuki','haruka','yuna','mika','rina','saki','nana',
+  // ── Common English first names (male) ─────────────────────────
+  'liam','noah','oliver','benjamin','elijah','lucas','mason','logan',
+  'alexander','ethan','jacob','michael','daniel','henry','jackson',
+  'sebastian','aiden','matthew','samuel','david','joseph','carter',
+  'owen','wyatt','jayden','dylan','grayson','levi','isaac','gabriel',
+  'julian','mateo','anthony','jaxon','lincoln','joshua','christopher',
+  'andrew','theodore','caleb','ryan','asher','nathan','thomas','eric',
+  'kevin','brian','adam','justin','brandon','tyler','timothy','aaron',
+  'alex','andy','jason','patrick','robert','richard','charles','peter',
+  'edward','scott','dennis','gary','todd','sean','derek','brad','craig',
+  'brett','drew','alan','barry','carl','dwight','fred','glen','grant',
+  'greg','howard','jesse','joel','kent','kyle','lee','leon','lloyd',
+  'neil','nick','phil','roger','ron','ross','roy','russell','stan',
+  'ted','terry','trent','troy','vince','wade','warren','wayne','albert',
+  'arthur','bob','bill','ben','bruce','charlie','chris','cliff','clint',
+  'cody','cole','colin','dallas','dan','dave','zach','zachary','caleb',
+  'ethan','aidan','kylie','kai','leo','nate','eli','jed','jude','lou',
+  'hank','clyde','floyd','wade','cyrus','amos','eli','felix','hugo',
+  'ivan','lars','kurt','omar','otto','rene','rolf','sven','thor',
+  'yusuf','ahmed','ali','hassan','omar','tariq','khalid','reza',
+  'kenji','hiroshi','takeshi','daisuke','yuto','haruto','sora','ren',
+  'jin','min','jun','ho','sung','hyun','tae','kang','dong',
+]);
 
 // Get display form of lemma: use stored original casing if available
 function lemmaDisplay(lemma) {
@@ -315,8 +493,8 @@ document.getElementById('text-input').addEventListener('input', function() {
 // ── Toggle chips ──────────────────────────────────────────────────
 function buildToggles() {
   const row = document.getElementById('toggle-row');
-  const allKeys = [...levels, '__extra__'];
-  const allLabels = [...levels.map(l => `Level ${l.replace(/level\s*/i,'')||l}`), 'Extracurricular'];
+  const allKeys = [...levels, '__proper__', '__extra__'];
+  const allLabels = [...levels.map(l => `Level ${l.replace(/level\s*/i,'')||l}`), 'Proper Noun', 'Extracurricular'];
   row.innerHTML = allKeys.map((key, i) => {
     const c = getColor(key);
     const checked = !disabledLevels.has(key);
@@ -342,7 +520,9 @@ function analyze() {
   const tokens = tokenize(text), wordTokens = tokens.filter(t => t.isWord);
   if (!wordTokens.length) { alert('No words found.'); return; }
 
-  const levelCounts = {}; levels.forEach(l => levelCounts[l] = 0); levelCounts['__extra__'] = 0;
+  const levelCounts = {}; levels.forEach(l => levelCounts[l] = 0);
+  levelCounts['__extra__'] = 0;
+  levelCounts['__proper__'] = 0;
 
   const tokenInfo = tokens.map(t => {
     if (!t.isWord) return {...t, level:null, lemma:null, translation:''};
@@ -352,8 +532,14 @@ function analyze() {
       levelCounts[level] = (levelCounts[level] || 0) + 1;
       return {...t, level, lemma, translation};
     } else {
+      const wordLower = t.text.toLowerCase();
+      const checkKey = lemma || wordLower;
+      if (PROPER_NOUNS.has(wordLower) || PROPER_NOUNS.has(checkKey)) {
+        levelCounts['__proper__']++;
+        return {...t, level:'__proper__', lemma:checkKey, translation:''};
+      }
       levelCounts['__extra__']++;
-      return {...t, level:'__extra__', lemma:t.text.toLowerCase(), translation:''};
+      return {...t, level:'__extra__', lemma:wordLower, translation:''};
     }
   });
 
@@ -375,8 +561,8 @@ function analyze() {
 // ── Recompute WLB + refresh all panels based on active toggles ────
 function recomputeAndRefresh() {
   const { tokenInfo, levelCounts, levels } = lastAnalysis;
-  const allKeys   = [...levels, '__extra__'];
-  const allLabels = [...levels.map(l => `Level ${l.replace(/level\s*/i,'')||l}`), 'Extracurricular'];
+  const allKeys   = [...levels, '__proper__', '__extra__'];
+  const allLabels = [...levels.map(l => `Level ${l.replace(/level\s*/i,'')||l}`), 'Proper Noun', 'Extracurricular'];
 
   // Effective counts (disabled levels → 0 for WLB, still shown greyed in chart)
   const activeCounts = {};
@@ -384,14 +570,17 @@ function recomputeAndRefresh() {
 
   const total = Object.values(activeCounts).reduce((s,v) => s+v, 0);
 
-  // WLB with tolerance grace
-  let graceRemaining = 4, weightedSum = 0, graceUsed = 0;
+  // WLB — proportional grace: first ~1% of L5+ words are softened to L4 weight (×5)
+  // based on Nation's finding that isolated advanced words don't indicate true difficulty
+  const graceLimit = Math.max(2, Math.round(total * 0.01));
+  let graceRemaining = graceLimit, weightedSum = 0, graceUsed = 0;
   const tokenInfoCopy = tokenInfo.map(t => ({...t, _graced: false}));
   tokenInfoCopy.filter(t => t.isWord && t.level && !disabledLevels.has(t.level)).forEach(t => {
+    if (t.level === '__proper__') return; // proper nouns never add weight
     const lvlNum = getLevelNum(t.level);
     let w;
-    if (t.level === '__extra__') { w = 15; }
-    else if (lvlNum >= 5 && graceRemaining > 0) { w = 3; graceRemaining--; graceUsed++; t._graced = true; }
+    if (t.level === '__extra__') { w = baseWeight(0); }
+    else if (lvlNum >= 5 && graceRemaining > 0) { w = baseWeight(4); graceRemaining--; graceUsed++; t._graced = true; }
     else { w = baseWeight(lvlNum); }
     weightedSum += w;
   });
@@ -399,39 +588,42 @@ function recomputeAndRefresh() {
   const wlbScore  = total > 0 ? (weightedSum / total) * 100 : 0;
   const wlbRounded = Math.round(wlbScore * 10) / 10;
 
+  // Thresholds recalibrated for Nation-aligned weights (L3=×2, L4=×5, L5=×10, L6=×16, Extra=×22)
   let wlbLabel, wlbDesc, wlbBadgeStyle;
-  if (wlbRounded <= 150)      { wlbLabel='Easy';         wlbDesc='Suitable for all audiences.';         wlbBadgeStyle='background:#C8F5D0;color:#1B5E20'; }
-  else if (wlbRounded <= 250) { wlbLabel='Intermediate'; wlbDesc='Standard academic difficulty.';       wlbBadgeStyle='background:#FFF9C4;color:#795500'; }
-  else if (wlbRounded <= 350) { wlbLabel='Advanced';     wlbDesc='Dense — requires strong vocabulary.'; wlbBadgeStyle='background:#FFE0B2;color:#BF360C'; }
-  else                         { wlbLabel='Specialized';  wlbDesc='Highly specialized vocabulary.';     wlbBadgeStyle='background:#FCE4EC;color:#880E4F'; }
+  if (wlbRounded <= 100)      { wlbLabel='Easy';         wlbDesc='Suitable for all audiences — foundational vocabulary dominates.';    wlbBadgeStyle='background:#C8F5D0;color:#1B5E20'; }
+  else if (wlbRounded <= 300) { wlbLabel='Intermediate'; wlbDesc='Standard academic difficulty — mix of university-level vocabulary.'; wlbBadgeStyle='background:#FFF9C4;color:#795500'; }
+  else if (wlbRounded <= 600) { wlbLabel='Advanced';     wlbDesc='Dense — requires strong academic vocabulary.';                       wlbBadgeStyle='background:#FFE0B2;color:#BF360C'; }
+  else                         { wlbLabel='Specialized';  wlbDesc='Highly specialized or technical vocabulary.';                       wlbBadgeStyle='background:#FCE4EC;color:#880E4F'; }
 
   document.getElementById('wlb-score').textContent = wlbRounded.toFixed(1);
   document.getElementById('wlb-badge').textContent = wlbLabel;
   document.getElementById('wlb-badge').style.cssText = wlbBadgeStyle;
   document.getElementById('wlb-desc').textContent = wlbDesc;
-  const graceNote = graceUsed > 0 ? ` (${graceUsed} advanced word${graceUsed>1?'s':''} covered by tolerance grace)` : '';
+  const graceNote = graceUsed > 0 ? ` (${graceUsed} advanced word${graceUsed>1?'s':''} softened by grace ×5)` : '';
   document.getElementById('wlb-formula').textContent = `Score = (${weightedSum} weighted pts ÷ ${total} words) × 100 = ${wlbRounded.toFixed(1)}${graceNote}`;
 
-  // Meter needle: clamp score 0–400, map to 0–100% bottom
-  const meterPct = Math.min(Math.max(wlbRounded / 400, 0), 1) * 100;
+  // Meter needle: clamp score 0–1000, map to 0–100%
+  const meterPct = Math.min(Math.max(wlbRounded / 1000, 0), 1) * 100;
   document.getElementById('wlb-needle').style.bottom = meterPct + '%';
 
   // Stat cards
-  let cF=0, cU=0, cA=0, cE=0;
+  let cF=0, cU=0, cA=0, cP=0, cE=0;
   levels.forEach(l => {
     const n=getLevelNum(l), c=activeCounts[l]||0;
     if(n<=2) cF+=c; else if(n<=4) cU+=c; else cA+=c;
   });
+  cP = activeCounts['__proper__']||0;
   cE = activeCounts['__extra__']||0;
   const covPct = total>0 ? (total-cE)/total*100 : 0;
 
   document.getElementById('stat-grid').innerHTML = `
     <div class="stat-card"><div class="stat-val">${total}</div><div class="stat-lbl">Total words</div></div>
     <div class="stat-card"><div class="stat-val">${covPct.toFixed(1)}%</div><div class="stat-lbl">In word list</div></div>
-    <div class="stat-card"><div class="stat-val" style="color:#F9A825">${cF}</div><div class="stat-lbl">L1–2 Foundational</div><div class="stat-sub">weight × 0</div></div>
-    <div class="stat-card"><div class="stat-val" style="color:#00ACC1">${cU}</div><div class="stat-lbl">L3–4 University</div><div class="stat-sub">weight × 3</div></div>
-    <div class="stat-card"><div class="stat-val" style="color:#7B1FA2">${cA}${graceUsed>0?' ('+graceUsed+' graced)':''}</div><div class="stat-lbl">L5–6 Advanced</div><div class="stat-sub">weight × 8 (first 4 → ×3)</div></div>
-    <div class="stat-card"><div class="stat-val" style="color:#AAAAAA">${cE}</div><div class="stat-lbl">Extracurricular</div><div class="stat-sub">weight × 5</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#F9A825">${cF}</div><div class="stat-lbl">L1–2 Foundational</div><div class="stat-sub">weight ×0 (K1–K2)</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#00ACC1">${cU}</div><div class="stat-lbl">L3–4 University</div><div class="stat-sub">weight ×2 / ×5</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#7B1FA2">${cA}${graceUsed>0?' ('+graceUsed+' graced)':''}</div><div class="stat-lbl">L5–6 Advanced</div><div class="stat-sub">weight ×10 / ×16</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#1976D2">${cP}</div><div class="stat-lbl">Proper Nouns</div><div class="stat-sub">weight ×0 (not counted)</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:#AAAAAA">${cE}</div><div class="stat-lbl">Extracurricular</div><div class="stat-sub">weight ×22</div></div>
   `;
 
   // Bar chart
@@ -465,10 +657,15 @@ function recomputeAndRefresh() {
       const label = t.level==='__extra__' ? 'Extracurricular' : t.level;
       const lvlNum = getLevelNum(t.level);
       const dispLemma = lemmaDisplay(t.lemma);
-      let tipExtra = t._graced ? ' [tolerance grace applied: counted as L4]' : '';
-      const tip = t.level==='__extra__'
-        ? `Extracurricular · weight ×15${disabled?' [excluded]':''}`
-        : `${label} · ${dispLemma}${t.translation?' · '+t.translation:''} · weight ×${baseWeight(lvlNum)}${tipExtra}${disabled?' [excluded]':''}`; 
+      let tipExtra = t._graced ? ' [grace: counted as ×5]' : '';
+      let tip;
+      if (t.level === '__extra__') {
+        tip = `Extracurricular · weight ×22${disabled?' [excluded]':''}`;
+      } else if (t.level === '__proper__') {
+        tip = `Proper Noun · ${dispLemma} · weight ×0 (not counted)${disabled?' [excluded]':''}`;
+      } else {
+        tip = `${label} · ${dispLemma}${t.translation?' · '+t.translation:''} · weight ×${baseWeight(lvlNum)}${tipExtra}${disabled?' [excluded]':''}`;
+      }
       const marker = t._graced ? '<sup style="font-size:9px;color:#AD1457;margin-left:1px">✦</sup>' : '';
       html += `<span class="w" style="background:${c.bg};border-bottom:2px solid ${c.border};${disabled?'opacity:0.35;':''}" title="${tip.replace(/"/g,'&quot;')}">${t.text}${marker}</span>`;
     } else { html += t.text; }
@@ -486,7 +683,7 @@ function recomputeAndRefresh() {
     const map = byLevel[key]; if (!map.size) return;
     const c = getColor(key);
     const lvlNum = getLevelNum(key);
-    const weightLabel = key==='__extra__' ? '×5' : `×${baseWeight(lvlNum)}`;
+    const weightLabel = key==='__proper__' ? '×0' : key==='__extra__' ? '×22' : `×${baseWeight(lvlNum)}`;
     const dimmed = disabledLevels.has(key) ? 'opacity:0.4;' : '';
     const words = [...map.entries()].sort((a,b) => a[0].localeCompare(b[0]));
     wlHtml += `<div class="wl-section" style="${dimmed}">
